@@ -359,6 +359,41 @@ pub fn parse_thinking_summary(raw: Option<&str>) -> Result<ThinkingSummary, Stri
     }
 }
 
+/// Parse `BUZZ_AGENT_LLM_HEADERS`. Pure (env-free) for testability.
+///
+/// `Name: value` pairs separated by `;`, e.g.
+/// `x-opencode-session: halo-buzz; User-Agent: halo-buzz-agent/1`.
+/// Unset or empty → no extra headers. A pair without `:`, an empty name, or a
+/// name/value HTTP would reject → startup error, so a typo fails loudly at
+/// boot instead of as an opaque 400 on the first prompt.
+pub fn parse_llm_headers(raw: Option<&str>) -> Result<Vec<(String, String)>, String> {
+    let mut headers = Vec::new();
+    for pair in raw.unwrap_or("").split(';') {
+        let pair = pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let Some((name, value)) = pair.split_once(':') else {
+            return Err(format!(
+                "config: BUZZ_AGENT_LLM_HEADERS entry {pair:?} must be `Name: value`"
+            ));
+        };
+        let (name, value) = (name.trim(), value.trim());
+        if reqwest::header::HeaderName::from_bytes(name.as_bytes()).is_err() {
+            return Err(format!(
+                "config: BUZZ_AGENT_LLM_HEADERS header name {name:?} is not a valid HTTP header name"
+            ));
+        }
+        if reqwest::header::HeaderValue::from_str(value).is_err() {
+            return Err(format!(
+                "config: BUZZ_AGENT_LLM_HEADERS value for {name:?} is not a valid HTTP header value"
+            ));
+        }
+        headers.push((name.to_owned(), value.to_owned()));
+    }
+    Ok(headers)
+}
+
 /// Parse `BUZZ_AGENT_THINKING_EFFORT`. Pure (env-free) for testability.
 pub fn parse_thinking_effort(raw: Option<&str>) -> Result<Option<ThinkingEffort>, String> {
     match raw.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
@@ -626,6 +661,10 @@ pub struct Config {
     /// Databricks gateway does not auto-cache, so without this the surfaced
     /// `cache_read_input_tokens` is structurally always 0.
     pub prompt_caching: bool,
+    /// Extra HTTP headers sent on every LLM request, for gateways that route
+    /// on them (OpenCode Go rejects requests without `x-opencode-session`).
+    /// Set via `BUZZ_AGENT_LLM_HEADERS`; see [`parse_llm_headers`].
+    pub llm_headers: Vec<(String, String)>,
 }
 
 impl Config {
@@ -745,6 +784,7 @@ impl Config {
                 env("BUZZ_AGENT_THINKING_SUMMARY").as_deref(),
             )?,
             prompt_caching: parse_env("BUZZ_AGENT_PROMPT_CACHING", 1u8)? != 0,
+            llm_headers: parse_llm_headers(env("BUZZ_AGENT_LLM_HEADERS").as_deref())?,
         };
         cfg.validate()?;
         Ok(cfg)
@@ -797,6 +837,7 @@ impl Config {
             thinking_effort: None,
             thinking_summary: ThinkingSummary::Auto,
             prompt_caching: false,
+            llm_headers: Vec::new(),
         }
     }
 
@@ -1419,6 +1460,45 @@ mod tests {
             err.contains("none|minimal|low|medium|high|xhigh|max"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn parse_llm_headers_unset_and_empty_yield_none() {
+        assert!(parse_llm_headers(None).unwrap().is_empty());
+        assert!(parse_llm_headers(Some("")).unwrap().is_empty());
+        assert!(parse_llm_headers(Some(" ; ;")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_llm_headers_reads_pairs_in_order() {
+        let got =
+            parse_llm_headers(Some("x-opencode-session: halo-buzz ; User-Agent:halo-buzz-agent/1;"))
+                .unwrap();
+        assert_eq!(
+            got,
+            vec![
+                ("x-opencode-session".to_owned(), "halo-buzz".to_owned()),
+                ("User-Agent".to_owned(), "halo-buzz-agent/1".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_llm_headers_keeps_colons_in_values() {
+        let got = parse_llm_headers(Some("X-Trace: a:b:c")).unwrap();
+        assert_eq!(got, vec![("X-Trace".to_owned(), "a:b:c".to_owned())]);
+    }
+
+    #[test]
+    fn parse_llm_headers_rejects_malformed_entries() {
+        let err = parse_llm_headers(Some("x-opencode-session halo")).unwrap_err();
+        assert!(err.contains("must be `Name: value`"), "{err}");
+        let err = parse_llm_headers(Some(": halo")).unwrap_err();
+        assert!(err.contains("not a valid HTTP header name"), "{err}");
+        let err = parse_llm_headers(Some("bad name: halo")).unwrap_err();
+        assert!(err.contains("not a valid HTTP header name"), "{err}");
+        let err = parse_llm_headers(Some("x-ok: bad\u{7f}value")).unwrap_err();
+        assert!(err.contains("not a valid HTTP header value"), "{err}");
     }
 
     #[test]

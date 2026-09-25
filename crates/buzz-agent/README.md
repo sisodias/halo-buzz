@@ -56,6 +56,15 @@ OPENROUTER_API_KEY=sk-or-v1-... \
 OPENROUTER_MODEL=anthropic/claude-sonnet-4.5 \
   ./target/release/buzz-agent
 
+# Or OpenCode Go (OpenAI-compatible; DeepSeek V4.1 Flash). OpenCode Go routes
+# requests by session, so x-opencode-session is required — see BUZZ_AGENT_LLM_HEADERS.
+BUZZ_AGENT_PROVIDER=openai \
+OPENAI_COMPAT_API_KEY=... \
+OPENAI_COMPAT_MODEL=deepseek-v4.1-flash \
+OPENAI_COMPAT_BASE_URL=https://opencode.ai/zen/go/v1 \
+BUZZ_AGENT_LLM_HEADERS='x-opencode-session: <stable-id>; User-Agent: buzz-agent/1' \
+  ./target/release/buzz-agent
+
 # Or Databricks model serving via OAuth 2.0 PKCE
 BUZZ_AGENT_PROVIDER=databricks \
 DATABRICKS_HOST=https://dbc-...cloud.databricks.com \
@@ -151,6 +160,7 @@ Everything is environment variables. No flags, no config files. (We are a subpro
 | `DATABRICKS_MODEL` | — | Required when provider=databricks or provider=databricks_v2. |
 | `DATABRICKS_MODEL_FILTER` | — | Optional discovery-only, comma-separated full-string `*`/`?` patterns OR-matched against raw Databricks endpoint and Unity Catalog model-service IDs. Blank/unset shows all; this is visibility filtering, not an authorization boundary. |
 | `DATABRICKS_TOKEN` | — | Optional static bearer escape hatch. If unset, Databricks uses browser OAuth + refresh cache. |
+| `BUZZ_AGENT_LLM_HEADERS` | — | Extra headers on every LLM request, as `Name: value` pairs separated by `;`. OpenCode Go needs `x-opencode-session: <stable id>`. Malformed entries fail at startup. |
 | `BUZZ_AGENT_SYSTEM_PROMPT` | built-in | Inline system prompt. |
 | `BUZZ_AGENT_SYSTEM_PROMPT_FILE` | — | File path. Mutually exclusive with the above. |
 | `BUZZ_AGENT_MAX_ROUNDS` | `0` | Tool-loop iteration cap. 0 = unlimited. |
@@ -240,6 +250,7 @@ lifecycle hook — see [MCP_DRIVEN_HOOKS.md](../../docs/MCP_DRIVEN_HOOKS.md).
 | llama.cpp | `openai` | `POST {base}/chat/completions` | any tool-calling GGUF |
 | Ollama | `openai` | `POST {base}/chat/completions` | llama3.1, qwen2.5-coder |
 | Block Gateway | `openai` | `POST {base}/chat/completions` | gpt-5, claude |
+| OpenCode Go | `openai` | `POST {base}/chat/completions` | deepseek-v4.1-flash, glm-5 |
 | OpenRouter | `openrouter` | `POST {base}/chat/completions` | anything they route (extended-thinking replay, provider-agnostic tool calling) |
 | Databricks | `databricks` | `POST {host}/serving-endpoints/{model}/invocations` | goose-claude-4-6-sonnet |
 | Databricks AI Gateway v2 | `databricks_v2` | `POST {host}/ai-gateway/{provider}/v1/...` | workspace endpoints and Unity Catalog model-service FQNs; UC GPT-5+ services use OpenAI Responses; other UC FQNs use MLflow Chat Completions |
@@ -249,6 +260,8 @@ The optional `DATABRICKS_MODEL_FILTER` applies only to model discovery. Each com
 If `BUZZ_AGENT_PROVIDER=anthropic` is selected without `ANTHROPIC_API_KEY`, `BUZZ_AGENT_PROVIDER=openai` is selected without `OPENAI_COMPAT_API_KEY`, or `BUZZ_AGENT_PROVIDER=openrouter` is selected without `OPENROUTER_API_KEY`, the agent returns an error — there is no implicit fallback to another provider.
 
 `provider=openai` speaks two HTTP dialects: the [Responses API](https://platform.openai.com/docs/api-reference/responses) (`/v1/responses`, required for GPT-5 / o-series tool-calling on OpenAI's own service) and the [Chat Completions API](https://platform.openai.com/docs/api-reference/chat) (`/chat/completions`, the broadly-supported OpenAI-compatible wire format).
+
+`BUZZ_AGENT_LLM_HEADERS` adds static headers to every LLM request, as `Name: value` pairs separated by `;`. It exists for gateways that route on a header rather than the body: OpenCode Go answers `400 MissingSessionID` unless the request carries `x-opencode-session`, so a gateway deployment sets e.g. `x-opencode-session: buzz-agent-host-1`. A malformed name or value fails at startup rather than as an opaque 400 on the first prompt. Header matching is case-insensitive, and a per-request header (the provider bearer) still wins over a configured default of the same name.
 
 By default (`OPENAI_COMPAT_API=auto`) the agent picks **Responses** when `OPENAI_COMPAT_BASE_URL` points at an `*.openai.com` host and **Chat Completions** everywhere else. Pin the choice explicitly with `OPENAI_COMPAT_API=chat` or `OPENAI_COMPAT_API=responses` for providers that diverge from the default (e.g. a Responses-compatible self-hosted gateway).
 
