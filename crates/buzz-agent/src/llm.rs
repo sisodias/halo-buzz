@@ -60,8 +60,17 @@ const LLM_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 
 impl Llm {
     pub fn new(cfg: &Config) -> Result<Self, AgentError> {
+        let mut default_headers = reqwest::header::HeaderMap::new();
+        for (name, value) in &cfg.llm_headers {
+            let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .map_err(|e| AgentError::Llm(format!("llm header name: {e}")))?;
+            let value = reqwest::header::HeaderValue::from_str(value)
+                .map_err(|e| AgentError::Llm(format!("llm header value: {e}")))?;
+            default_headers.insert(name, value);
+        }
         let http = Client::builder()
             .connect_timeout(LLM_CONNECT_TIMEOUT)
+            .default_headers(default_headers)
             // No client-level read_timeout: we apply a per-request total
             // timeout via RequestBuilder::timeout() so that escalated budgets
             // on slow models are not silently floored by a fixed client-level
@@ -2615,6 +2624,7 @@ mod tests {
             thinking_effort: None,
             thinking_summary: ThinkingSummary::Auto,
             prompt_caching: true,
+            llm_headers: Vec::new(),
         }
     }
 
@@ -7710,6 +7720,62 @@ mod tests {
             MAX_RETRIES,
             "must exhaust exactly MAX_RETRIES attempts, no more"
         );
+    }
+
+    /// `BUZZ_AGENT_LLM_HEADERS` reach the wire on the OpenAI-compatible route
+    /// (OpenCode Go 400s without `x-opencode-session`), and the per-request
+    /// bearer still wins over the defaults.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn openai_compat_sends_configured_llm_headers() {
+        let (url, captured, _attempts) = spawn_openrouter_stub(vec![CannedResponse::new(
+            200,
+            r#"{"choices":[{"message":{"content":"ok"}}]}"#,
+        )])
+        .await;
+        let mut c = cfg(Provider::OpenAi);
+        c.base_url = url;
+        c.llm_headers = vec![
+            ("x-opencode-session".into(), "halo-buzz-test".into()),
+            ("User-Agent".into(), "halo-buzz-agent/1".into()),
+        ];
+        let llm = Llm::new(&c).unwrap();
+        complete_model(&llm, &c, "deepseek-v4.1-flash")
+            .await
+            .expect("200 succeeds");
+        let headers = captured.lock().await;
+        let header_str = headers
+            .first()
+            .expect("one request captured")
+            .to_lowercase();
+        assert!(
+            header_str.contains("x-opencode-session: halo-buzz-test"),
+            "got: {header_str}"
+        );
+        assert!(
+            header_str.contains("user-agent: halo-buzz-agent/1"),
+            "got: {header_str}"
+        );
+        assert!(
+            header_str.contains("authorization: bearer key"),
+            "got: {header_str}"
+        );
+    }
+
+    /// With no `BUZZ_AGENT_LLM_HEADERS`, nothing extra is sent.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn openai_compat_sends_no_extra_headers_by_default() {
+        let (url, captured, _attempts) = spawn_openrouter_stub(vec![CannedResponse::new(
+            200,
+            r#"{"choices":[{"message":{"content":"ok"}}]}"#,
+        )])
+        .await;
+        let mut c = cfg(Provider::OpenAi);
+        c.base_url = url;
+        let llm = Llm::new(&c).unwrap();
+        complete_model(&llm, &c, "m").await.expect("200 succeeds");
+        let headers = captured.lock().await;
+        let header_str = headers.first().expect("one request captured").to_lowercase();
+        assert!(!header_str.contains("x-opencode-session"), "got: {header_str}");
     }
 
     /// Attribution headers (`HTTP-Referer`, `X-OpenRouter-Title`) are on the
