@@ -35,6 +35,16 @@ import {
 import { VirtualizedList } from "@/shared/ui/VirtualizedList";
 import { CommunityInviteDialog } from "./CommunityInviteDialog";
 
+declare global {
+  interface Window {
+    __HALO_CHAT_HOST__?: {
+      mode: "standalone";
+      teamInvitationsUrl: string;
+      canManageUsers: boolean;
+    };
+  }
+}
+
 function formatDisplayName(member: RelayMember, displayName?: string | null) {
   const trimmedDisplayName = displayName?.trim();
   if (
@@ -254,6 +264,11 @@ export function CommunityMembersSettingsCard({
 }: {
   currentPubkey?: string;
 }) {
+  const haloHost =
+    typeof window !== "undefined" &&
+    window.__HALO_CHAT_HOST__?.mode === "standalone"
+      ? window.__HALO_CHAT_HOST__
+      : undefined;
   const myMembershipQuery = useMyRelayMembershipLookupQuery();
   const currentRole = myMembershipQuery.data?.membership?.role ?? null;
   const canManageRelay = currentRole === "owner" || currentRole === "admin";
@@ -309,15 +324,34 @@ export function CommunityMembersSettingsCard({
     <section className="min-w-0" data-testid="settings-community-members">
       <SettingsSectionHeader
         action={
-          <Button
-            data-testid="community-invite-dialog-trigger"
-            onClick={() => setInviteDialogOpen(true)}
-          >
-            Invite to community
-          </Button>
+          haloHost ? (
+            haloHost.canManageUsers ? (
+              <Button asChild>
+                <a
+                  data-testid="halo-team-invitations-link"
+                  href={haloHost.teamInvitationsUrl}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  Invite HALO teammate
+                </a>
+              </Button>
+            ) : null
+          ) : (
+            <Button
+              data-testid="community-invite-dialog-trigger"
+              onClick={() => setInviteDialogOpen(true)}
+            >
+              Invite to community
+            </Button>
+          )
         }
         title="Invites"
-        description="Manage members and community access."
+        description={
+          haloHost
+            ? "HALO manages Chat access and invitations."
+            : "Manage members and community access."
+        }
       />
 
       <SettingsOptionGroup
@@ -383,11 +417,13 @@ export function CommunityMembersSettingsCard({
         </div>
       </SettingsOptionGroup>
 
-      <CommunityInviteDialog
-        isOwner={currentRole === "owner"}
-        onOpenChange={setInviteDialogOpen}
-        open={inviteDialogOpen}
-      />
+      {haloHost ? null : (
+        <CommunityInviteDialog
+          isOwner={currentRole === "owner"}
+          onOpenChange={setInviteDialogOpen}
+          open={inviteDialogOpen}
+        />
+      )}
     </section>
   );
 }
