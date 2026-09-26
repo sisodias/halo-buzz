@@ -272,6 +272,7 @@ export function CommunityMembersSettingsCard({
   const myMembershipQuery = useMyRelayMembershipLookupQuery();
   const currentRole = myMembershipQuery.data?.membership?.role ?? null;
   const canManageRelay = currentRole === "owner" || currentRole === "admin";
+  const canManageHaloInvites = haloHost?.canManageUsers === true;
   const membersQuery = useRelayMembersQuery(canManageRelay);
   const members = React.useMemo(
     () => membersQuery.data ?? [],
@@ -306,7 +307,7 @@ export function CommunityMembersSettingsCard({
     });
   }, [members, profiles, search]);
 
-  if (myMembershipQuery.isLoading) {
+  if (myMembershipQuery.isLoading && !canManageHaloInvites) {
     return (
       <section className="min-w-0" data-testid="settings-community-members">
         <p className="text-sm text-muted-foreground">
@@ -317,6 +318,34 @@ export function CommunityMembersSettingsCard({
   }
 
   if (!canManageRelay || !currentRole) {
+    const teamInvitationsUrl = haloHost?.canManageUsers
+      ? haloHost.teamInvitationsUrl
+      : null;
+    if (!teamInvitationsUrl) return null;
+
+    return (
+      <section className="min-w-0" data-testid="settings-community-members">
+        <SettingsSectionHeader
+          action={
+            <Button asChild>
+              <a
+                data-testid="halo-team-invitations-link"
+                href={teamInvitationsUrl}
+                rel="noreferrer"
+                target="_blank"
+              >
+                Invite HALO teammate
+              </a>
+            </Button>
+          }
+          title="Invites"
+          description="HALO manages Chat access and invitations."
+        />
+      </section>
+    );
+  }
+
+  if (!currentRole) {
     return null;
   }
 

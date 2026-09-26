@@ -130,6 +130,10 @@ export function SettingsView({
   const { isMobile, open: sidebarOpen, setOpen: setSidebarOpen } = useSidebar();
   const myMembershipQuery = useMyRelayMembershipLookupQuery();
   const featureState = useFeatureSnapshot();
+  const haloHost =
+    typeof window !== "undefined" ? window.__HALO_CHAT_HOST__ : undefined;
+  const canManageHaloInvites =
+    haloHost?.mode === "standalone" && haloHost.canManageUsers === true;
   const visibleSections = React.useMemo(() => {
     return settingsSections.filter((s) => {
       // Feature gate check. Manifest is preview-only — if the gate id is in
@@ -147,11 +151,14 @@ export function SettingsView({
       // Invites and member management require a discovered owner/admin role.
       // Open relays have no membership snapshot or invite controls.
       if (s.value === "community-members") {
-        return canManageCommunityMembers(myMembershipQuery.data);
+        return (
+          canManageHaloInvites ||
+          canManageCommunityMembers(myMembershipQuery.data)
+        );
       }
       return true;
     });
-  }, [myMembershipQuery.data, featureState]);
+  }, [canManageHaloInvites, myMembershipQuery.data, featureState]);
 
   const [isLoaded, setIsLoaded] = React.useState(false);
   const [appVersion, setAppVersion] = React.useState<string | null>(null);
